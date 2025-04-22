@@ -3,8 +3,19 @@ import React, { useState, useEffect } from 'react';
 import Sidebar from '../partials/Sidebar';
 import Header from '../partials/Header';
 import { useDispatch, useSelector } from 'react-redux';
-import { createImportReceipt, resetImportReceipt } from '../redux/ImportReceiptSlice';
+import {
+  createImportReceipt,
+  resetImportReceipt,
+  fetchAllImportReceipts,
+  approveImportReceipt,
+  cancelImportReceipt,
+  fetchImportReceiptById,
+  resetCurrentReceipt
+} from '../redux/ImportReceiptSlice';
 import ImportReceiptDetailModal from '../components/DetailPopup';
+import Loading from '../components/Loading';
+import { fetchImportDetailsWithMaterialByReceiptId } from '../redux/ImportDetailSlice';
+import { formatDateArray } from '../utils/DateTimeFormat';
 
 function ImportReceipt() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -17,13 +28,42 @@ function ImportReceipt() {
   const [reason, setReason] = useState('');
   const [supplierId, setSupplierId] = useState('');
   const [warehouseId, setWarehouseId] = useState('');
+  const [cancelReason, setCancelReason] = useState('');
+  const [showCancelModal, setShowCancelModal] = useState(false);
   const [materials, setMaterials] = useState([
     { materialId: '', quantityDoc: '', quantityActual: '', unitPrice: '', totalPrice: '', note: '' },
   ]);
 
   const dispatch = useDispatch();
-  const { loading, error, createdReceipt } = useSelector((state) => state.importReceipts);
 
+  // Lấy thông tin người dùng hiện tại từ Redux store
+  const { user } = useSelector((state) => state.auth);
+  const userId = user?.id || 1; // Mặc định là 1 nếu không có user
+
+  const {
+    loading,
+    error,
+    createdReceipt,
+    importReceipts,
+    currentReceipt
+  } = useSelector((state) => state.importReceipts);
+
+  // Tải danh sách phiếu nhập khi component được mount
+  useEffect(() => {
+    dispatch(fetchAllImportReceipts());
+  }, [dispatch]);
+
+  // Loading effect
+  const [isLoading, setIsLoading] = useState(true);
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setIsLoading(false);
+    }, 2000);
+
+    return () => clearTimeout(timer);
+  }, []);
+
+  // Xử lý sau khi tạo phiếu nhập thành công
   useEffect(() => {
     if (createdReceipt) {
       alert('Tạo phiếu nhập thành công!');
@@ -35,8 +75,47 @@ function ImportReceipt() {
       setWarehouseId('');
       setMaterials([{ materialId: '', quantityDoc: '', quantityActual: '', unitPrice: '', totalPrice: '', note: '' }]);
       dispatch(resetImportReceipt());
+      // Tải lại danh sách phiếu nhập
+      dispatch(fetchAllImportReceipts());
     }
   }, [createdReceipt, dispatch]);
+
+  const handleViewDetail = (receiptId) => {
+    setSelectedReceipt(receiptId); // Chỉ cần set ID
+    setDetailModalOpen(true);      // Mở modal
+  };
+
+
+
+  // Phê duyệt phiếu nhập
+  const handleApprove = (receiptId) => {
+    if (window.confirm('Bạn có chắc chắn muốn phê duyệt phiếu nhập này không?')) {
+      dispatch(approveImportReceipt({ id: receiptId, userId }));
+    }
+  };
+
+  // Hiển thị modal hủy phiếu
+  const handleShowCancelModal = (receiptId) => {
+    setSelectedReceipt(receiptId);
+    setShowCancelModal(true);
+  };
+
+  // Hủy phiếu nhập
+  const handleCancel = () => {
+    if (cancelReason.trim() === '') {
+      alert('Vui lòng nhập lý do hủy phiếu!');
+      return;
+    }
+
+    dispatch(cancelImportReceipt({
+      id: selectedReceipt,
+      userId,
+      reason: cancelReason
+    }));
+
+    setShowCancelModal(false);
+    setCancelReason('');
+  };
 
   const handleMaterialChange = (index, field, value) => {
     const updated = [...materials];
@@ -57,7 +136,16 @@ function ImportReceipt() {
     const updated = materials.filter((_, i) => i !== index);
     setMaterials(updated);
   };
-
+  const formatDate = (dateValue) => {
+    if (!dateValue) return 'Không rõ';
+    try {
+      const str = String(dateValue);
+      const cleaned = str.includes('T') ? str.split('.')[0] : str.replace(' ', 'T').split('.')[0];
+      return new Date(cleaned).toLocaleString('vi-VN');
+    } catch {
+      return 'Không rõ';
+    }
+  };
   const handleSubmit = (e) => {
     e.preventDefault();
 
@@ -67,6 +155,7 @@ function ImportReceipt() {
       warehouse_id: parseInt(warehouseId),
       debtAccount,
       creditAccount,
+      reason,
       importDetails: materials.map((item) => ({
         materialId: parseInt(item.materialId),
         quantityDoc: parseFloat(item.quantityDoc),
@@ -77,33 +166,21 @@ function ImportReceipt() {
       })),
     };
 
-    dispatch(createImportReceipt({ data: dto, userId: 1 }));
+    dispatch(createImportReceipt({ data: dto, userId }));
   };
 
-  const mockData = [
-    {
-      importReceiptId: 1,
-      invoiceNumber: 'HD001',
-      invoiceDate: '2025-04-15',
-      supplier: { id: 1, name: 'Công ty ABC' },
-      warehouse: { id: 1, name: 'Kho trung tâm' },
-      status: 'CREATED'
-    },
-    {
-      importReceiptId: 2,
-      invoiceNumber: 'HD002',
-      invoiceDate: '2025-04-14',
-      supplier: { id: 2, name: 'Gạo Miền Tây' },
-      warehouse: { id: 2, name: 'Kho miền Tây' },
-      status: 'APPROVED'
-    }
-  ];
+  const receiptData = importReceipts;
 
-  const filteredData = mockData.filter(
+
+  const filteredData = receiptData.filter(
     (item) =>
-      item.invoiceNumber.toLowerCase().includes(search.toLowerCase()) ||
-      item.supplier.name.toLowerCase().includes(search.toLowerCase())
+      item.invoiceNumber?.toLowerCase().includes(search.toLowerCase()) ||
+      item.supplier?.name?.toLowerCase().includes(search.toLowerCase())
   );
+
+  if (isLoading) {
+    return <Loading />;
+  }
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -122,6 +199,12 @@ function ImportReceipt() {
               </button>
             </div>
 
+            {error && (
+              <div className="mb-4 bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative">
+                <span className="block sm:inline">{error}</span>
+              </div>
+            )}
+
             <div className="mb-4">
               <input
                 type="text"
@@ -136,25 +219,27 @@ function ImportReceipt() {
               <table className="table-auto w-full text-left">
                 <thead className="text-xs font-semibold uppercase text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-700">
                   <tr>
-                    <th className="p-3 w-[10%] text-left">Mã HĐ</th>
-                    <th className="p-3 w-[15%] text-left">Ngày hóa đơn</th>
-                    <th className="p-3 w-[25%] text-left">Nhà cung cấp</th>
-                    <th className="p-3 w-[25%] text-left">Kho</th>
-                    <th className="p-3 w-[15%] text-center">Trạng thái</th>
-                    <th className="p-3 w-[10%] text-center"></th>
+                    <th className="p-3 w-[15%] text-left">Ngày tạo</th>
+                    <th className="p-3 w-[20%] text-left">Nhà cung cấp</th>
+                    <th className="p-3 w-[15%] text-left">Kho</th>
+                    <th className="p-3 w-[15%] text-right">Tổng tiền</th>
+                    <th className="p-3 w-[10%] text-center">Trạng thái</th>
+                    <th className="p-3 w-[25%] text-center">Thao tác</th>
                   </tr>
                 </thead>
                 <tbody className="text-sm divide-y divide-gray-200 dark:divide-gray-700">
                   {filteredData.map((entry) => (
-                    <tr key={entry.importReceiptId}>
-                      <td className="p-3">{entry.invoiceNumber}</td>
-                      <td className="p-3">{entry.invoiceDate}</td>
-                      <td className="p-3">{entry.supplier.name}</td>
-                      <td className="p-3">{entry.warehouse.name}</td>
+                    <tr key={entry.id || entry.importReceiptId}>
+                      <td className="p-3">{formatDateArray(entry.createdAt)}</td>
+                      <td className="p-3">{entry.supplier?.name}</td>
+                      <td className="p-3">{entry.warehouse?.name}</td>
+                      <td className="p-3 text-right">{entry.totalAmount ? new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND' }).format(entry.totalAmount) : "0 ₫"}</td>
                       <td className="p-3 text-center">
                         <span
                           className={`inline-block px-2 py-1 text-xs font-medium rounded-full ${entry.status === "APPROVED"
-                              ? "bg-green-100 text-green-800"
+                            ? "bg-green-100 text-green-800"
+                            : entry.status === "CANCELED"
+                              ? "bg-red-100 text-red-800"
                               : "bg-yellow-100 text-yellow-800"
                             }`}
                         >
@@ -162,15 +247,31 @@ function ImportReceipt() {
                         </span>
                       </td>
                       <td className="p-3 text-center">
-                        <button
-                          onClick={() => {
-                            setSelectedReceipt(entry);
-                            setDetailModalOpen(true);
-                          }}
-                          className="px-3 py-1 text-sm rounded-lg text-white bg-green-500 hover:bg-green-600"
-                        >
-                          Chi tiết
-                        </button>
+                        <div className="flex justify-center space-x-2">
+                          <button
+                            onClick={() => handleViewDetail(entry.id || entry.importReceiptId)}
+                            className="px-2 py-1 text-sm rounded-lg text-white bg-blue-500 hover:bg-blue-600"
+                          >
+                            Chi tiết
+                          </button>
+
+                          {entry.status === "CREATED" && (
+                            <>
+                              <button
+                                onClick={() => handleApprove(entry.id || entry.importReceiptId)}
+                                className="px-2 py-1 text-sm rounded-lg text-white bg-green-500 hover:bg-green-600"
+                              >
+                                Duyệt
+                              </button>
+                              <button
+                                onClick={() => handleShowCancelModal(entry.id || entry.importReceiptId)}
+                                className="px-2 py-1 text-sm rounded-lg text-white bg-red-500 hover:bg-red-600"
+                              >
+                                Hủy
+                              </button>
+                            </>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -237,20 +338,64 @@ function ImportReceipt() {
                 <button type="button" onClick={addMaterialRow} className="text-sm text-violet-600 hover:underline">+ Thêm dòng vật tư</button>
               </fieldset>
 
-              <div className="flex justify-end space-x-2 pt-4">
-                <button type="button" className="px-4 py-2 bg-gray-300 dark:bg-gray-600 rounded hover:bg-gray-400 dark:hover:bg-gray-500" onClick={() => setShowModal(false)}>
+              <div className="flex justify-between">
+                <button type="button" onClick={() => setShowModal(false)} className="px-6 py-2 border rounded-lg text-gray-700 hover:bg-gray-100 dark:text-white dark:hover:bg-gray-700">
                   Hủy
                 </button>
-                <button type="submit" className="px-4 py-2 bg-violet-600 text-white rounded hover:bg-violet-700" disabled={loading}>
-                  {loading ? 'Đang lưu...' : 'Lưu phiếu'}
+                <button type="submit" disabled={loading} className="px-6 py-2 rounded-lg bg-violet-600 text-white hover:bg-violet-700 disabled:opacity-50">
+                  {loading ? 'Đang xử lý...' : 'Lưu phiếu nhập kho'}
                 </button>
               </div>
             </form>
           </div>
         </div>
       )}
-      <ImportReceiptDetailModal isOpen={detailModalOpen}
-        onClose={() => setDetailModalOpen(false)}></ImportReceiptDetailModal>
+
+      {showCancelModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-white/70 dark:bg-gray-900/40 backdrop-blur-sm">
+          <div className="bg-white dark:bg-gray-800 rounded shadow-lg w-full max-w-md p-6">
+            <h3 className="text-xl font-semibold mb-4">Hủy phiếu nhập kho</h3>
+            <p className="mb-4 text-gray-600 dark:text-gray-300">Vui lòng nhập lý do hủy phiếu nhập này:</p>
+            <textarea
+              value={cancelReason}
+              onChange={(e) => setCancelReason(e.target.value)}
+              className="w-full px-3 py-2 mb-4 border rounded resize-none h-32 dark:bg-gray-700 dark:text-white"
+              placeholder="Lý do hủy..."
+            ></textarea>
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={() => {
+                  setShowCancelModal(false);
+                  setCancelReason('');
+                }}
+                className="px-4 py-2 border rounded text-gray-700 hover:bg-gray-100 dark:text-white dark:hover:bg-gray-700"
+              >
+                Đóng
+              </button>
+              <button
+                onClick={handleCancel}
+                className="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
+              >
+                Xác nhận hủy
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {detailModalOpen && selectedReceipt && (
+        <ImportReceiptDetailModal
+          isOpen={detailModalOpen}
+          onClose={() => {
+            setDetailModalOpen(false);
+            setSelectedReceipt(null);
+            dispatch(resetCurrentReceipt());
+          }}
+          receiptId={selectedReceipt}
+        />
+      )}
+
+
     </div>
   );
 }
